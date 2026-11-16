@@ -321,14 +321,8 @@ eval_transforms = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-def build_mobilenet_model(num_classes):
-    """
-    [THẦY HỎI]: Bản chất việc chỉnh sửa mô hình MobileNetV2 ở đây là gì?
-    [TRẢ LỜI]: Sử dụng kỹ thuật Transfer Learning (Học chuyển giao). Nạp trọng số pre-trained 
-    từ tập ImageNet (1000 lớp), sau đó thay thế lớp phân loại cuối cùng model.classifier[1] 
-    bằng một lớp Linear mới phù hợp với num_classes (số lớp bệnh cây trồng hiện tại).
-    """
-    weights = models.MobileNet_V2_Weights.DEFAULT
+def build_mobilenet_model(num_classes, pretrained=True):
+    weights = models.MobileNet_V2_Weights.DEFAULT if pretrained else None
     model = models.mobilenet_v2(weights=weights)
     model.classifier[1] = nn.Linear(model.last_channel, num_classes)
     return model
@@ -628,6 +622,7 @@ def predict(crop_type):
     results_detail = {}
 
     # Dự đoán bằng YOLOv8
+    # Dự đoán bằng YOLOv8
     if has_yolo:
         try:
             y_model = YOLO(yolo_path)
@@ -636,6 +631,9 @@ def predict(crop_type):
             y_disease = y_res.names[top1_idx]
             y_conf = round(float(y_res.probs.top1conf.item()) * 100, 2)
             results_detail['yolov8'] = {'disease': y_disease, 'confidence': y_conf}
+            # Giải phóng RAM ngay sau khi YOLO chạy xong
+            del y_model, y_res
+            gc.collect()
         except Exception as e:
             results_detail['yolov8_error'] = str(e)
 
@@ -645,22 +643,26 @@ def predict(crop_type):
             with open(classes_path, 'r', encoding='utf-8') as f:
                 class_names = json.load(f)
 
-            mb_model = build_mobilenet_model(len(class_names))
+            # Đặt pretrained=False vì đã nạp file trọng số train sẵn ngay bên dưới
+            mb_model = build_mobilenet_model(len(class_names), pretrained=False)
             mb_model.load_state_dict(torch.load(mobilenet_path, map_location=torch.device('cpu')))
             mb_model.eval()
 
             tensor = eval_transforms(image).unsqueeze(0)
             with torch.no_grad():
                 outputs = mb_model(tensor)
-                probs = torch.nn.functional.softmax(outputs[0], dim=0) # Dùng Softmax đổi Logits ra % xác suất
+                probs = torch.nn.functional.softmax(outputs[0], dim=0)
                 conf, idx = torch.max(probs, 0)
 
             mb_disease = class_names[idx.item()]
             mb_conf = round(conf.item() * 100, 2)
             results_detail['mobilenet'] = {'disease': mb_disease, 'confidence': mb_conf}
+            # Giải phóng RAM của MobileNetV2
+            del mb_model, tensor, outputs
+            gc.collect()
         except Exception as e:
             results_detail['mobilenet_error'] = str(e)
-
+            
     # Đánh giá tổng hợp kết quả giữa 2 mô hình
     final_disease, final_confidence = "", 0.0
 
