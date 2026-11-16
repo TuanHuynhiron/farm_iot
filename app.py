@@ -9,8 +9,12 @@ import random
 # ==============================================================================
 # 1. CẤU HÌNH HỆ THỐNG & ĐỒ HỌA
 # ==============================================================================
+# Tối ưu cho Server Linux / Render: Ép thư mục cấu hình tạm vào /tmp để tránh lỗi quyền ghi
+os.environ.setdefault('YOLO_CONFIG_DIR', '/tmp')
+os.environ.setdefault('MPLCONFIGDIR', '/tmp')
+
 # BẮT BUỘC: Ép Matplotlib dùng backend 'Agg' (không hiển thị giao diện GUI).
-# Lý do: Khi chạy PyTorch/YOLO trong Thread ngầm của Flask trên Windows,
+# Lý do: Khi chạy PyTorch/YOLO trong Thread ngầm của Flask trên Windows/Linux,
 # nếu không có dòng này, Matplotlib sẽ cố mở cửa sổ GUI và làm TREO/CRASH server.
 import matplotlib
 matplotlib.use('Agg')
@@ -23,6 +27,9 @@ from torch.utils.data import DataLoader
 from PIL import Image
 from flask import Flask, render_template, request, jsonify
 from ultralytics import YOLO
+
+# Giới hạn số luồng CPU của PyTorch về 1 để tiết kiệm tối đa RAM trên gói Free của Render (512MB)
+torch.set_num_threads(1)
 
 app = Flask(__name__)
 # Cho phép nhận Request dữ liệu tối đa 500 MB cho mỗi lần Upload
@@ -322,6 +329,13 @@ eval_transforms = transforms.Compose([
 ])
 
 def build_mobilenet_model(num_classes, pretrained=True):
+    """
+    [THẦY HỎI]: Bản chất việc chỉnh sửa mô hình MobileNetV2 ở đây là gì?
+    [TRẢ LỜI]: Sử dụng kỹ thuật Transfer Learning (Học chuyển giao). Nạp trọng số pre-trained 
+    từ tập ImageNet (1000 lớp), sau đó thay thế lớp phân loại cuối cùng model.classifier[1] 
+    bằng một lớp Linear mới phù hợp với num_classes (số lớp bệnh cây trồng hiện tại).
+    (Khi dự đoán thực tế đặt pretrained=False để nạp trực tiếp file trọng số đã train, tiết kiệm RAM).
+    """
     weights = models.MobileNet_V2_Weights.DEFAULT if pretrained else None
     model = models.mobilenet_v2(weights=weights)
     model.classifier[1] = nn.Linear(model.last_channel, num_classes)
@@ -532,7 +546,7 @@ def train_model(crop_type):
                 test_loader = DataLoader(test_ds, batch_size=min(32, len(test_ds)), shuffle=False, num_workers=0)
 
                 tot_batches = len(train_loader)
-                mb_model = build_mobilenet_model(len(class_names))
+                mb_model = build_mobilenet_model(len(class_names), pretrained=True)
                 if has_gpu: mb_model = mb_model.cuda()
 
                 # [THẦY HỎI]: Hàm Loss function và Optimizer sử dụng ở đây là gì?
@@ -572,7 +586,7 @@ def train_model(crop_type):
 
                 # Đánh giá MobileNetV2 trên cả 3 tập Train, Val, Test
                 save_status(crop_type, "running", 88, "📈 Đánh giá MobileNetV2...", "📈 Đang tính toán Confusion Matrix & Metrics cho MobileNetV2...")
-                mb_eval_model = build_mobilenet_model(len(class_names))
+                mb_eval_model = build_mobilenet_model(len(class_names), pretrained=False)
                 mb_eval_model.load_state_dict(torch.load(mobilenet_path, map_location=torch.device('cpu')))
                 if has_gpu: mb_eval_model = mb_eval_model.cuda()
 
@@ -622,7 +636,6 @@ def predict(crop_type):
     results_detail = {}
 
     # Dự đoán bằng YOLOv8
-    # Dự đoán bằng YOLOv8
     if has_yolo:
         try:
             y_model = YOLO(yolo_path)
@@ -631,7 +644,7 @@ def predict(crop_type):
             y_disease = y_res.names[top1_idx]
             y_conf = round(float(y_res.probs.top1conf.item()) * 100, 2)
             results_detail['yolov8'] = {'disease': y_disease, 'confidence': y_conf}
-            # Giải phóng RAM ngay sau khi YOLO chạy xong
+            # Giải phóng RAM ngay sau khi YOLO chạy xong để tránh tràn bộ nhớ trên Render
             del y_model, y_res
             gc.collect()
         except Exception as e:
@@ -651,18 +664,18 @@ def predict(crop_type):
             tensor = eval_transforms(image).unsqueeze(0)
             with torch.no_grad():
                 outputs = mb_model(tensor)
-                probs = torch.nn.functional.softmax(outputs[0], dim=0)
+                probs = torch.nn.functional.softmax(outputs[0], dim=0) # Dùng Softmax đổi Logits ra % xác suất
                 conf, idx = torch.max(probs, 0)
 
             mb_disease = class_names[idx.item()]
             mb_conf = round(conf.item() * 100, 2)
             results_detail['mobilenet'] = {'disease': mb_disease, 'confidence': mb_conf}
-            # Giải phóng RAM của MobileNetV2
+            # Giải phóng RAM của MobileNetV2 sau khi dự đoán
             del mb_model, tensor, outputs
             gc.collect()
         except Exception as e:
             results_detail['mobilenet_error'] = str(e)
-            
+
     # Đánh giá tổng hợp kết quả giữa 2 mô hình
     final_disease, final_confidence = "", 0.0
 
@@ -687,7 +700,7 @@ def predict(crop_type):
         'details': results_detail
     })
 
-# Khởi chạy máy chủ Flask tại cổng 5000 (Tắt use_reloader để tránh làm hỏng Threading)
+# Khởi chạy máy chủ Flask nhận cổng PORT động của Render (Tắt debug & use_reloader để tiết kiệm RAM)
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
