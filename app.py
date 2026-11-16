@@ -687,4 +687,5 @@ def predict(crop_type):
 
 # Khởi chạy máy chủ Flask tại cổng 5000 (Tắt use_reloader để tránh làm hỏng Threading)
 if __name__ == '__main__':
-    app.run(debug=True, use_reloader=False, port=5000)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
