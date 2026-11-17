@@ -5,12 +5,51 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chẩn Đoán Bệnh Lá {{ crop.name }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        /* Tạo độ nổi 3D và hiệu ứng lún xuống khi nhấn cho tất cả các nút */
+        .btn {
+            transition: transform 0.1s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.1s ease, filter 0.1s ease !important;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+        }
+        .btn-primary {
+            box-shadow: 0 4px 0 #0a58ca, 0 6px 14px rgba(13, 110, 253, 0.25);
+        }
+        .btn-primary:active:not(:disabled) {
+            transform: scale(0.96) translateY(3px) !important;
+            box-shadow: 0 1px 0 #0a58ca, 0 2px 5px rgba(13, 110, 253, 0.2) !important;
+            filter: brightness(0.92);
+        }
+
+        .btn-secondary {
+            box-shadow: 0 3px 0 #495057, 0 4px 8px rgba(0, 0, 0, 0.12);
+        }
+        .btn-secondary:active:not(:disabled) {
+            transform: scale(0.95) translateY(2px) !important;
+            box-shadow: 0 1px 0 #495057, 0 1px 3px rgba(0, 0, 0, 0.12) !important;
+            filter: brightness(0.92);
+        }
+
+        /* Hiệu ứng nhấn cho nút "Chọn tệp" bên trong ô input file */
+        input[type="file"] {
+            -webkit-tap-highlight-color: transparent;
+            cursor: pointer;
+        }
+        input[type="file"]::file-selector-button {
+            transition: transform 0.1s ease, background-color 0.1s ease;
+            cursor: pointer;
+        }
+        input[type="file"]:active::file-selector-button {
+            transform: scale(0.95);
+            background-color: #dde0e3;
+        }
+    </style>
 </head>
 <body class="bg-light">
     <div class="container py-4">
         <!-- Nút quay về trang chủ -->
         <div class="mb-3">
-            <a href="/" class="btn btn-sm btn-secondary">← Quay lại Trang Chủ</a>
+            <a href="/" onclick="goBackWithFeedback(event, '/')" class="btn btn-sm btn-secondary fw-semibold px-3">← Quay lại Trang Chủ</a>
         </div>
 
         <h2 class="text-center text-success fw-bold mb-3">
@@ -48,7 +87,7 @@
                                 </div>
                             </div>
 
-                            <button type="submit" id="btnPredict" class="btn btn-primary w-100 fw-bold py-2">
+                            <button type="submit" id="btnPredict" class="btn btn-primary w-100 fw-bold py-2 fs-6">
                                 Chẩn đoán ngay
                             </button>
                         </form>
@@ -70,6 +109,16 @@
     <script>
         const CROP_TYPE = "{{ crop_type }}";
 
+        function triggerHaptic() {
+            try { if (navigator.vibrate) navigator.vibrate(15); } catch (e) {}
+        }
+
+        function goBackWithFeedback(e, url) {
+            e.preventDefault();
+            triggerHaptic();
+            setTimeout(() => { window.location.href = url; }, 110);
+        }
+
         // Hiển thị ảnh xem trước ngay khi chọn/chụp
         document.getElementById('predictFile').addEventListener('change', (e) => {
             const file = e.target.files[0];
@@ -88,6 +137,8 @@
         // Gửi ảnh lên server để AI chẩn đoán
         document.getElementById('predictForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            triggerHaptic();
+
             const fileInput = document.getElementById('predictFile');
             if (!fileInput.files.length) return;
 
